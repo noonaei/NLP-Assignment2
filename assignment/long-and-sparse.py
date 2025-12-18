@@ -1,134 +1,178 @@
-# todo: go over the wikipedia source only the 8M first lines.
-# todo: filter the vocabulary to only the 10k most frequent words
 import time
 import string
 from collections import defaultdict
-from operator import indexOf
-
+from csv_reader import *
+from dev_utils import *
+from collections import Counter
+import re
+import pickle
+from scipy.sparse import coo_matrix, csr_matrix
+from sklearn.linear_model import LinearRegression
 import numpy as np
 
 
-MAX_LINES = 8000000  # 8 million lines
+MAX_LINES = 7_000_000  # 7 million lines
 TOP_K = 10000
 CORPUS_FILE_NAME = './data/en.wikipedia2018.10M.txt'
+VOCAB_PICKLE_FILE = './vocab.pkl'
+PROGRESS_INTERVAL = 100000  # Print progress every N lines
 
-def clean_line(text_line: str) -> str:
-    """Cleans a line of text by lowercasing and removing punctuation.
 
-    Args:
-        text_line (str): The raw input text line.
+def tokenize(text):
+    """Simple tokenizer to clean and split text."""
+    text = text.lower()
+    return re.findall(r'\b\w+\b', text)
 
-    Returns:
-        str: The cleaned text line.
+
+def build_and_save_vocab(corpus_file_path, output_pickle_path, k=TOP_K, max_lines=MAX_LINES):
     """
-    text_line = text_line.lower()
-    translator = str.maketrans('', '', string.punctuation)
-    cleaned_line = text_line.translate(translator)
-    return cleaned_line
-
-
-def get_word2feq(corpus_filename, max_lines):
-    """Builds word frequency dictionary from corpus file.
+    Build vocabulary of top k most frequent words and save to pickle file.
     
-    Args:
-        corpus_filename: Path to the corpus text file.
-        max_lines: Maximum number of lines to process.
-    
-    Returns:
-        dict: Dictionary mapping words to their frequencies.
+    Returns: vocab dict {word: idx}
     """
-    start_time = time.time()
-    word2freq = defaultdict(int)
-    line_count = 0
-
-    try:
-        with open(corpus_filename, 'r', encoding='utf-8') as fin:
-            # Iterate over the file line by line
-            for line in fin:
-                if line_count < max_lines:
-                    cleaned_line = clean_line(line)
-                    line_count += 1
-                    for word in cleaned_line.split():
-                        word2freq[word] += 1
-                else:
-                    # Once the limit is reached, stop reading the file
-                    break
-
-        # 3. Output results
-        end_time = time.time()
-        print(f"Execution time: {end_time - start_time:.4f} seconds")
-        print(f"Successfully read and processed the first {line_count} lines of '{corpus_filename}'")
-        print(f"Total Unique Words (Vocabulary Size): {len(word2freq)}")
-
-        return word2freq
-
-    except FileNotFoundError:
-        print(f"ERROR: The file '{corpus_filename}' was not found.")
-    except Exception as e:
-        print(f"An unexpected error occurred during file processing: {e}")
-
-
-
-def get_vocab(word2freq, vocab_size):
-    """Extracts the top K most frequent words from a frequency dictionary.
+    print(f"[Build Vocab] Starting: Finding top {k} words...")
     
-    Args:
-        word2freq: Dictionary mapping words to their frequencies.
-        vocab_size: Number of top words to return.
+    word_counts = Counter()
     
-    Returns:
-        Set of the top K most frequent words.
-    """
-    word2freq_len = len(word2freq)
-    if word2freq_len < vocab_size:
-        # If we have fewer words than requested, return all words as a set
-        return set(word2freq.keys())
-    else:
-        # Get top K most frequent words and return as a set
-        top_words = sorted(
-            word2freq.items(),
-            key=lambda item: item[1],
-            reverse=True
-        )[:vocab_size]
-        # Extract only the words w/o the frequencies
-        return {word for word, freq in top_words}
+    with open(corpus_file_path, 'r', encoding='utf-8') as f:
+        for i, line in enumerate(f):
+            if i >= max_lines:
+                break
+            
+            if i % PROGRESS_INTERVAL == 0:
+                print(f"  Processing line {i:,} / {max_lines:,}")
+            
+            tokens = tokenize(line)
+            word_counts.update(tokens)
+    
+    # Build vocab from top k words
+    most_common = word_counts.most_common(k)
+    vocab = {word: idx for idx, (word, _) in enumerate(most_common)}
+    
+    # Save to pickle
+    with open(output_pickle_path, 'wb') as pf:
+        pickle.dump(vocab, pf)
+    
+    print(f"[Build Vocab] Completed: {len(vocab)} words saved to {output_pickle_path}")
+    return vocab
 
 
-def create_co_occurrence_mat(corpus_file_name, data:list, vocab:list, window_size):
-    nrows = len(data)
-    ncols = len(vocab)
+def load_vocab(pickle_path):
+    """Load vocabulary from pickle file."""
+    print(f"[Load Vocab] Loading from {pickle_path}...")
+    with open(pickle_path, 'rb') as f:
+        vocab = pickle.load(f)
+    print(f"[Load Vocab] Loaded {len(vocab)} words")
+    return vocab
 
-    data_lookup = set(data)  # Set for O(1) membership checking
-    data_lookup_dict = {word: idx for idx, word in enumerate(data)}  # O(1) word-to-row-index lookup
-    vocab_lookup = {word: idx for idx, word in enumerate(vocab)}  # O(1) word-to-column-index lookup
-    co_occurrence_mat = np.zeros((nrows, ncols))
 
-    # go over the corpus
-    # when hit a word that is in the data - check which words accompanying it
+import numpy as np
+from collections import Counter
+
+
+def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size, max_lines=MAX_LINES):
+    t_start = time.time()
+    print("Creating co-occurrence matrix (Optimized)...")
+
+    # 1. Pre-compute mappings (O(1) lookups)
+    data_to_idx = {word: i for i, word in enumerate(data)}
+    vocab_lookup = set(vocab.keys())
+    data_lookup = set(data)
+
+    mat =  [[0 for _ in range(len(vocab_lookup))] for _ in range(len(data))]
+
+
+    line_idx = 0
     with open(corpus_file_name, 'r', encoding='utf-8') as fin:
-        # Iterate over the file line by line
         for line in fin:
-            cleaned_line = clean_line(line).split() # todo: when reading corpus the first time should create a cleaned corpus pickle file for faster I/O
-            cleaned_line_len = len(cleaned_line)
+            if line_idx > max_lines:
+                break
+            line_idx += 1
+            if line_idx % 100000 == 0:
+                print(f"Processing line: {line_idx}")
 
-            for index, word in enumerate(cleaned_line):
-                if word in data_lookup: # if we hit a word which is in the data then increment the words accompanying it
+            cleaned_line = tokenize(line)
+            n = len(cleaned_line)
 
-                    # increment the words in the left window
-                    word_index = data_lookup_dict[word]
-                    for i in range(index-window_size, index):
-                        if i >= 0:
-                            context_word = cleaned_line[i]
-                            if context_word in vocab_lookup:
-                                co_occurrence_mat[word_index, vocab_lookup[context_word]] += 1
+            for i, word in enumerate(cleaned_line):
+                if word in data_lookup:
+                    start = max(0, i - window_size)
+                    # Right window: from i+1 to min(n, i+window+1)
+                    end = min(n, i + window_size + 1)
 
-                    # increment the words in the right window
-                    for i in range(index+1, index+window_size+1):
-                        if i >= cleaned_line_len:
-                            break
-                        else:
-                            context_word = cleaned_line[i]
-                            if context_word in vocab_lookup:
-                                co_occurrence_mat[word_index, vocab_lookup[context_word]] += 1
+                    # Combine ranges to iterate purely over neighbors
+                    # We use line_vocab_ids because we only care if neighbors are in 'vocab'
 
-    return co_occurrence_mat
+                    # Left context
+                    for j in range(start, i):
+                        context_word = cleaned_line[j]
+                        if context_word in vocab:
+                            mat[data_to_idx[word]][vocab[context_word]] += 1
+
+                    # Right context
+                    for j in range(i + 1, end):
+                        context_word = cleaned_line[j]
+                        if context_word in vocab:
+                            mat[data_to_idx[word]][vocab[context_word]] += 1
+        t_end = time.time()
+
+        print(f"buildin the matrix took {t_end - t_start} seconds")
+    return np.array(mat)
+
+
+
+
+
+# ============= STEP 1: Build and save vocab (run once) =============
+# Uncomment to build vocab:
+# start = time.time()
+# vocab = build_and_save_vocab(CORPUS_FILE_NAME, VOCAB_PICKLE_FILE, TOP_K, MAX_LINES)
+# print(f"Vocab build took {time.time() - start:.2f} seconds")
+
+
+# ============= STEP 2: Load vocab and build matrix =============
+start = time.time()
+
+
+#build_and_save_vocab(CORPUS_FILE_NAME, "vocab.pkl", TOP_K, MAX_LINES)
+# Load vocab from pickle
+vocab = load_vocab(VOCAB_PICKLE_FILE)
+
+# Load target words
+train_data = read_csv_to_tuples('./data/nrc-valence-scores.trn.csv')
+train_target_words = []
+y_train = []
+for tup in train_data:
+    train_target_words.append(tup[0])
+    y_train.append(tup[1])
+
+test_data = read_csv_to_tuples('./data/nrc-valence-scores.tst.csv')
+test_target_words = []
+y_test = []
+for tup in test_data:
+    test_target_words.append(tup[0])
+    y_test.append(tup[1])
+
+data_for_co_occurrence_mat = train_target_words + test_target_words
+
+# Build matrix
+mate = build_co_occurrence_matrix(CORPUS_FILE_NAME, data_for_co_occurrence_mat, vocab,  3,  7_000_000)
+
+# Save to pickle
+"""
+with open('./pickle_mat.pkl', 'wb') as pmf:
+    pickle.dump(vocab, pmf)
+
+
+
+
+reg = LinearRegression().fit(mate, y_train)
+reg.score(mate, y_train)
+
+
+end = time.time()
+"""
+
+#print(f"Matrix has {len(mat)} rows (target words) and {vocab_size} columns (vocab size)")
+
+
