@@ -5,20 +5,9 @@ model to predict valence scores for words based on their distributional context.
 """
 
 from utils import *
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import normalize
-from sklearn.metrics import mean_squared_error
 import numpy as np
 
-
-MAX_LINES = 7_000_000  # 7 million lines
-TOP_K = 10000
-CORPUS_FILE_NAME = './data/en.wikipedia2018.10M.txt'
-WINDOW_SIZE = 3
-VOCAB_PICKLE_FILE = './pkl/vocab.pkl'
-
-
-def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size, max_lines=MAX_LINES):
+def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size, max_lines):
     """Build co-occurrence matrix for target words within a context window.
     
     Constructs a matrix where each row represents a target word and columns
