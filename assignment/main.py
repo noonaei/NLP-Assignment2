@@ -1,13 +1,17 @@
 import json
 import time
 import embeddings
-import statsmodels.api as sm
+import long_and_sparse as lsp
+import utils as utls
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import normalize
 from sklearn.metrics import mean_squared_error
-from scipy import stats
-
+import numpy as np
 
 VOCABULARY_SIZE = 10000
-WINDOW_SIZE = 0  # todo: find the window size that works best for you
+WINDOW_SIZE = 3
+VOCAB_PICKLE_FILE = './pkl/vocab.pkl'
+MAX_LINES = 7_000_000
 
 
 def predict_words_valence(train_file: str, test_file: str, data_path: str, is_dense_embedding: bool) -> (float, float):
@@ -16,32 +20,41 @@ def predict_words_valence(train_file: str, test_file: str, data_path: str, is_de
 
     if is_dense_embedding:
         X_train, y_train, X_test, y_test = embeddings.build_dense_matrices(train_file, test_file)
+    else:
+        # Load pre-computed from 7M lines vocab from pickle
+        vocab = utls.load_pickle(VOCAB_PICKLE_FILE)
+
+        # Load training data and separate words from valence scores
+        train_target_words, y_train = utls.read_csv_to_tuples(train_file)
+        test_target_words, y_test = utls.read_csv_to_tuples(test_file)
+
+        # Combine train and test words to build single co-occurrence matrix
+        data_for_co_occurrence_mat = train_target_words + test_target_words
+
+        # compute the co-occurrence matrix
+        co_occurrence_mat = lsp.build_co_occurrence_matrix(data_path, data_for_co_occurrence_mat, vocab, WINDOW_SIZE, MAX_LINES)
+
+        # normalize the co-occurrence matrix
+        log1p_corr_mat = np.log1p(co_occurrence_mat)
+        mat_final = normalize(log1p_corr_mat, norm='l2', axis=1)
+
+        # Split normalized matrix back into train and test sets
+        X_train = mat_final[:len(train_target_words), :]
+        X_test = mat_final[-len(test_target_words):, :]
 
 
+    reg = LinearRegression().fit(X_train, y_train)
+    pred_test = reg.predict(X_test)
 
-    print(f'X_train shape: {X_train.shape}, y_train shape: {y_train.shape}')
-    print(f'X_test shape: {X_test.shape}, y_test shape: {y_test.shape}')
+    corr_mat = np.corrcoef(pred_test, y_test)
+    corr = corr_mat[0, 1]
+    mse = mean_squared_error(y_test, pred_test)
 
-    X_train = sm.add_constant(X_train)
-    X_test = sm.add_constant(X_test)
-
-    model = sm.OLS(y_train, X_train)
-    result = model.fit()
-
-    print(result.summary())
-
-    y_pred = result.predict(X_test)
-    mse = mean_squared_error(y_test, y_pred)
-    corr = stats.pearsonr(y_test, y_pred)[0]
-    #returns (correlation_coefficient, p_value)
-
-
-    return mse , corr  #mse, corr
+    return mse , corr
 
 
 if __name__ == '__main__':
     start_time = time.time()
-
     with open('config.json', 'r') as json_file:
         config = json.load(json_file)
 

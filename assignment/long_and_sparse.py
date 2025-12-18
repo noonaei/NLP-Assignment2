@@ -4,7 +4,7 @@ Builds word embeddings from co-occurrence statistics and trains a linear regress
 model to predict valence scores for words based on their distributional context.
 """
 
-from utils_michael import *
+from utils import *
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import normalize
 from sklearn.metrics import mean_squared_error
@@ -14,8 +14,8 @@ import numpy as np
 MAX_LINES = 7_000_000  # 7 million lines
 TOP_K = 10000
 CORPUS_FILE_NAME = './data/en.wikipedia2018.10M.txt'
-VOCAB_PICKLE_FILE = './vocab.pkl'
 WINDOW_SIZE = 3
+VOCAB_PICKLE_FILE = './pkl/vocab.pkl'
 
 
 def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size, max_lines=MAX_LINES):
@@ -59,6 +59,8 @@ def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size,
                 if line_idx >= max_lines:
                     break
                 line_idx += 1
+                if line_idx % 100000 == 0:
+                    print(f"Processed line: {line_idx}")
 
                 cleaned_line = tokenize(line)
                 n = len(cleaned_line)
@@ -85,34 +87,3 @@ def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size,
         print(f"Error: {e}")
         raise
     return np.array(mat)
-
-
-# Load pre-computed from 7M lines vocab from pickle
-vocab = load_pickle(VOCAB_PICKLE_FILE)
-
-# Load training data and separate words from valence scores
-train_target_words, y_train = read_csv_to_tuples('./data/nrc-valence-scores.trn.csv')
-test_target_words, y_test = read_csv_to_tuples('./data/nrc-valence-scores.tst.csv')
-
-# Combine train and test words to build single co-occurrence matrix
-data_for_co_occurrence_mat = train_target_words + test_target_words
-
-co_occurrence_mat = build_co_occurrence_matrix(CORPUS_FILE_NAME, data_for_co_occurrence_mat, vocab, WINDOW_SIZE, MAX_LINES)
-
-# L2 normalize each row to create unit-length word vectors
-log1p_corr_mat = np.log1p(co_occurrence_mat)
-mat_final = normalize(log1p_corr_mat, norm='l2', axis=1)
-
-# Split normalized matrix back into train and test sets
-X_train = mat_final[:len(train_target_words), :]
-X_test = mat_final[-len(test_target_words):, :]
-
-reg = LinearRegression().fit(X_train, y_train)
-pred_test = reg.predict(X_test)
-
-
-corr_mat = np.corrcoef(pred_test, y_test)
-corr = corr_mat[0, 1]
-mse = mean_squared_error(y_test, pred_test)
-
-
