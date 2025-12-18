@@ -4,7 +4,8 @@ import pickle
 from collections import Counter
 import re
 import csv
-from typing import List, Tuple
+from typing import List
+import numpy as np
 
 def tokenize(text):
     """Lowercase text and extract alphanumeric word tokens.
@@ -91,16 +92,16 @@ def save_pickle(var, output_pickle_path):
         raise
 
 
-def read_csv_to_tuples(filepath: str) -> List[Tuple[str, float]]:
-    """Parse CSV file into list of (string, float) tuples.
+def read_csv_to_tuples(filepath: str) -> tuple[List[str], np.ndarray]:
+    """Parse CSV file and separate into feature and target arrays.
     
     Args:
         filepath: Path to CSV file (UTF-8).
         
     Returns:
-        List of (string, float) tuples.
+        Tuple of (X, y) where X is list of strings and y is NumPy array of floats.
     """
-    result = []
+    data = []
 
     try:
         with open(filepath, 'r', encoding='utf-8') as file:
@@ -109,9 +110,16 @@ def read_csv_to_tuples(filepath: str) -> List[Tuple[str, float]]:
                 if len(row) == 2:
                     string_value = row[0].strip()
                     float_value = float(row[1].strip())
-                    result.append((string_value, float_value))
+                    data.append((string_value, float_value))
     except Exception as e:
         print(f"Error: {e}")
         raise
 
-    return result
+    # Separate tuples into X (features) and y (targets) for ML compatibility
+    X = []
+    y = []
+    for tup in data:
+        X.append(tup[0])
+        y.append(tup[1])
+
+    return X, np.array(y)
