@@ -1,6 +1,6 @@
 import json
 import time
-import embeddings
+import dense
 import long_and_sparse as lsp
 import utils as utls
 from sklearn.linear_model import LinearRegression
