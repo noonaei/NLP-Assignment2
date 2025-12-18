@@ -15,7 +15,7 @@ MAX_LINES = 7_000_000  # 7 million lines
 TOP_K = 10000
 CORPUS_FILE_NAME = './data/en.wikipedia2018.10M.txt'
 VOCAB_PICKLE_FILE = './vocab.pkl'
-WINDOW_SIZE = 4
+WINDOW_SIZE = 3
 
 
 def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size, max_lines=MAX_LINES):
@@ -59,8 +59,6 @@ def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size,
                 if line_idx >= max_lines:
                     break
                 line_idx += 1
-                if (line_idx % 100_000) == 0:
-                    print(f"Processed line: {line_idx}")
 
                 cleaned_line = tokenize(line)
                 n = len(cleaned_line)
@@ -100,10 +98,10 @@ test_target_words, y_test = read_csv_to_tuples('./data/nrc-valence-scores.tst.cs
 data_for_co_occurrence_mat = train_target_words + test_target_words
 
 co_occurrence_mat = build_co_occurrence_matrix(CORPUS_FILE_NAME, data_for_co_occurrence_mat, vocab, WINDOW_SIZE, MAX_LINES)
-#co_occurrence_mat = load_pickle('./co_mat/co_mat_w4.pkl')
 
 # L2 normalize each row to create unit-length word vectors
-mat_final = normalize(co_occurrence_mat, norm='l2', axis=1)
+log1p_corr_mat = np.log1p(co_occurrence_mat)
+mat_final = normalize(log1p_corr_mat, norm='l2', axis=1)
 
 # Split normalized matrix back into train and test sets
 X_train = mat_final[:len(train_target_words), :]
@@ -116,6 +114,5 @@ pred_test = reg.predict(X_test)
 corr_mat = np.corrcoef(pred_test, y_test)
 corr = corr_mat[0, 1]
 mse = mean_squared_error(y_test, pred_test)
-print(f"Window size {WINDOW_SIZE}: Correlation: {corr:.4f}, MSE: {mse:.4f}")
 
 
