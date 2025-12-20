@@ -39,7 +39,9 @@ def build_co_occurrence_matrix(corpus_file_name, data: list, vocab, window_size,
     data_lookup = set(data)
 
     # Initialize matrix as list of lists (faster for incremental updates than numpy)
-    mat =  [[0 for _ in range(len(vocab))] for _ in range(len(data))]
+    vocab_len = len(vocab)
+    data_len = len(data)
+    mat =  [[0 for _ in range(vocab_len)] for _ in range(data_len)]
 
     line_idx = 0
     try:
